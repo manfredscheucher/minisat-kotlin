@@ -1,0 +1,13 @@
+[versions]
+kotlin = "2.2.20"
+# Android support (so the modules can also target Android when consumed by an Android app).
+agp = "8.13.2"
+android-compileSdk = "36"
+android-minSdk = "24"
+
+[libraries]
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+
+[plugins]
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+androidLibrary = { id = "com.android.library", version.ref = "agp" }
