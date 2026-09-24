@@ -7,29 +7,29 @@ import kotlin.math.abs
 import kotlin.math.pow
 
 /**
- * Faithful Kotlin port of MiniSat's bare core CDCL solver (MIT, (c) 2003-2010 Niklas Een,
- * Niklas Sorensson). See ../shadow/minisat-c/ for the verbatim upstream Solver.cc
- * (minisat_orig.cc) and the self-contained instrumented reference (minisat_trace.cc).
+ * Kotlin port of MiniSat's core CDCL solver by Manfred Scheucher, 2026.
+ * Upstream MiniSat: MIT, (c) 2003-2010 Niklas Een, Niklas Sorensson.
  *
- * This is a 1:1 translation of the core algorithm so the port can be shadowed against the
- * C reference: same double-precision VSIDS activities, same activity heap with the same
- * VarOrderLt (strictly-greater) comparator and the same tie-break (heap order), same
- * watched-literal propagation, same 1-UIP conflict analysis with deep clause minimization
- * (ccmin_mode = 2), same Luby restarts, same activity-based reduceDB, and full phase
- * saving (phase_saving = 2).
+ * The core algorithm is translated line-for-line so the port can be shadowed against the C.
+ * The upstream Solver.cc (minisat_orig.cc) and the instrumented reference (minisat_trace.cc)
+ * are in ../shadow/minisat-c/. Same double-precision VSIDS activities; same activity heap
+ * with the same VarOrderLt (strictly-greater) comparator and the same tie-break (heap order);
+ * same watched-literal propagation; same 1-UIP conflict analysis with deep clause minimization
+ * (ccmin_mode = 2); same Luby restarts; same activity-based reduceDB; full phase saving
+ * (phase_saving = 2).
  *
- * Arena translation (per the methodology): MiniSat's RegionAllocator<uint32>/CRef +
- * Clause-with-header layout is replaced by an [IntArray]-backed store [ca] with Int
- * handles (a "CRef" is an index into a parallel set of arrays). Clause literals are packed
- * MiniSat-style ([Lit.x] = var*2 + sign); a literal-indexed array (`watches`) has size 2n.
+ * Memory layout: MiniSat's RegionAllocator<uint32>/CRef + Clause-with-header layout becomes
+ * an [IntArray]-backed store [ca] with Int handles (a "CRef" is an index into a parallel set
+ * of arrays). Clause literals are packed MiniSat-style ([Lit.x] = var*2 + sign); a
+ * literal-indexed array (`watches`) has size 2n.
  *
- * FLOATING POINT: MiniSat's decision heuristic uses `double` activities. Kotlin/JVM `Double`
- * is IEEE-754 the same as C's `double`, and every activity update here is transcribed in the
- * exact same evaluation order as the C reference, so the trace is expected to match at L1
- * (full trace) on these instances. Where a differently-rounded activity could flip a heap
- * tie the shadow test degrades to L2 (event/decision-variable sequence); see the tests.
+ * Floating point: MiniSat's decision heuristic uses `double` activities. Kotlin/JVM `Double`
+ * is IEEE-754, the same as C's `double`, and every activity update happens in the same
+ * evaluation order as the C reference, so the trace matches at L1 (full trace) on these
+ * instances. Where a differently-rounded activity could flip a heap tie, the shadow test
+ * drops to L2 (event/decision-variable sequence); see the tests.
  *
- * Not idiomatic Kotlin on purpose -- correspondence to the C beats idiom.
+ * The code follows the C structure rather than idiomatic Kotlin, so the two stay comparable.
  */
 /**
  * Precision of the *clause* activity accumulator.
