@@ -23,8 +23,22 @@ This repo is just the solver source, so it can be reused on its own.
 
 ## Build
 
-Requires a JDK and the Gradle wrapper in this repo. `common/` must be checked out
-(clone with `--recursive`, or `git submodule update --init`).
+Requires a JDK and the Gradle wrapper in this repo. `ksat-common` is a git submodule
+mounted at `common/`, so clone recursively (a plain `git clone` leaves it empty and the
+build fails with `No matching variant of project :ksat-common`):
+
+```bash
+git clone --recursive https://github.com/manfredscheucher/minisat-kotlin.git
+cd minisat-kotlin
+```
+
+Already cloned without `--recursive`? Pull the submodule in:
+
+```bash
+git submodule update --init --recursive
+```
+
+Then build:
 
 ```bash
 ./gradlew compileKotlinJvm   # or build for all targets
