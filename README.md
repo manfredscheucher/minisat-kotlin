@@ -12,14 +12,11 @@ git submodule (mounted at `common/`). Package namespace is `org.bytefred.ksat`.
 
 ## Byte-for-byte port
 
-This is a line-by-line port of the original C/C++ solver, verified against it trace by
-trace (same decisions, propagations and conflicts in the same order), not just on the
-final SAT/UNSAT answer. That verification harness — the instrumented C reference, the
-test CNFs, the golden traces and the shadow tests — lives in the main repo, together with
-the benchmarks, the `Ksat` facade and the docs:
+This is a line-by-line port of the original C/C++ solver, checked to behave identically to
+it (same decisions, propagations and conflicts, not just the final SAT/UNSAT answer). This
+repo is just the solver source, usable on its own; the verification harness, benchmarks,
+`Ksat` facade and docs live in the main project:
 **[sat-solvers-kotlin](https://github.com/manfredscheucher/sat-solvers-kotlin)**.
-
-This repo is just the solver source, so it can be reused on its own.
 
 ## Build
 
