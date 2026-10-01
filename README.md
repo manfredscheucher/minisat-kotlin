@@ -14,9 +14,10 @@ git submodule (mounted at `common/`). Package namespace is `org.bytefred.ksat`.
 
 This is a line-by-line port of the original C/C++ solver, checked to behave identically to
 it (same decisions, propagations and conflicts, not just the final SAT/UNSAT answer). This
-repo is just the solver source, usable on its own; the verification harness, benchmarks,
-`Ksat` facade and docs live in the main project:
-**[sat-solvers-kotlin](https://github.com/manfredscheucher/sat-solvers-kotlin)**.
+repo is just the solver source, usable on its own. The `Ksat` facade over all four solvers is
+in the main repo **[sat-solvers-kotlin](https://github.com/manfredscheucher/sat-solvers-kotlin)**;
+the verification harness, benchmarks and the multiplatform demo are in its optional
+**[ksat-extra](https://github.com/manfredscheucher/ksat-extra)** submodule.
 
 ## Build
 
