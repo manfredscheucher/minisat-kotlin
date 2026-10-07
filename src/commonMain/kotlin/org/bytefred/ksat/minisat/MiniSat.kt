@@ -8,7 +8,8 @@ import kotlin.math.pow
 
 /**
  * Kotlin port of MiniSat's core CDCL solver by Manfred Scheucher, 2026.
- * Upstream MiniSat: MIT, (c) 2003-2010 Niklas Een, Niklas Sorensson.
+ * Upstream MiniSat: 2.2.0 core/Solver.cc (github.com/niklasso/minisat, final release;
+ * the optional SimpSolver preprocessing layer is not ported); MIT, (c) 2003-2010 Niklas Een, Niklas Sorensson.
  *
  * The core algorithm is translated line-for-line so the port can be shadowed against the C.
  * The upstream Solver.cc (minisat_orig.cc) and the instrumented reference (minisat_trace.cc)
