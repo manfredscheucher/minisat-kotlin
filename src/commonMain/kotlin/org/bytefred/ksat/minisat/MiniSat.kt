@@ -695,12 +695,46 @@ class MiniSat(
     // ---- assumptions (decision literals forced before free search) ----
     // MiniSat's incremental interface: solve_() is given a vector of assumption literals which
     // are made as forced decisions (one per decision level) at the start of search, BEFORE any
-    // heuristic branching. If an assumption is already falsified we return UNSAT for this solve
-    // (analyzeFinal in upstream also builds the final conflict clause; callers here only need the
-    // verdict, so we skip it). After every solve the trail is rolled back to level 0
+    // heuristic branching. If an assumption is already falsified we return UNSAT for this solve,
+    // after analyzeFinal has expressed the final conflict in terms of the assumptions (stored in
+    // [conflict], read by [failed]). After every solve the trail is rolled back to level 0
     // (cancelUntil(0) in solveInternal), so the base clauses stay loaded and the SAME instance can
     // be solved again under different assumptions -- no clause reload.
     private var assumptions: IntArray = IntArray(0)
+
+    // Solver.h `vec<Lit> conflict`: if the problem is unsatisfiable (possibly under assumptions),
+    // this holds the final conflict clause expressed in the assumptions (Lit.x values), i.e. the
+    // NEGATIONS of the failed assumptions.
+    private val conflict = IntArrayList()
+
+    // Solver::analyzeFinal: calculates the (possibly empty) set of assumptions that led to the
+    // assignment of p, and stores the result in outConflict. Emits no trace; seen[] is restored.
+    private fun analyzeFinal(p: Int, outConflict: IntArrayList) {
+        outConflict.clear()
+        outConflict.add(p)
+
+        if (decisionLevel() == 0) return
+
+        seen[litVar(p)] = 1
+
+        for (i in trail.size - 1 downTo trailLim[0]) {
+            val x = litVar(trail[i])
+            if (seen[x] != 0) {
+                if (reason(x) == CREF_UNDEF) {
+                    check(level(x) > 0) { "analyzeFinal: decision var $x at level 0" }
+                    outConflict.add(litNeg(trail[i]))
+                } else {
+                    val cr = reason(x)
+                    for (j in 1 until clSize(cr))
+                        if (level(litVar(clLit(cr, j))) > 0)
+                            seen[litVar(clLit(cr, j))] = 1
+                }
+                seen[x] = 0
+            }
+        }
+
+        seen[litVar(p)] = 0
+    }
 
     // ---- search ----
     private val learntClause = IntArrayList()
@@ -750,6 +784,7 @@ class MiniSat(
                         newDecisionLevel()
                     } else if (isFalse(valueLit(p))) {
                         // conflicting assumption -> UNSAT for this solve
+                        analyzeFinal(litNeg(p), conflict)
                         return L_FALSE
                     } else {
                         next = p
@@ -769,6 +804,7 @@ class MiniSat(
     }
 
     private fun solveInternal(): Int { // 0 UNSAT, 1 SAT
+        conflict.clear()
         if (!ok) { tr("RESULT UNSAT"); return 0 }
         maxLearnts = nClauses() * learntsizeFactor
         if (maxLearnts < minLearntsLim) maxLearnts = minLearntsLim.toDouble()
@@ -786,6 +822,7 @@ class MiniSat(
         // Capture the model BEFORE cancelUntil(0) undoes the search assignments,
         // exactly as MiniSat's solve_ does.
         if (status == L_TRUE) captureModel()
+        else if (status == L_FALSE && conflict.size == 0) ok = false
         cancelUntil(0)
         return if (status == L_TRUE) { tr("RESULT SAT"); 1 } else { tr("RESULT UNSAT"); 0 }
     }
@@ -820,7 +857,8 @@ class MiniSat(
      * the base clauses are NOT re-added. After this returns, the trail is rolled back to decision
      * level 0, so the SAME instance can be solved again under different assumptions (or none) on the
      * exact same clause set. On SAT, [valueOf] reflects the model of THIS solve (assumptions applied);
-     * on UNSAT the assumptions were jointly inconsistent with the formula.
+     * on UNSAT, [failed] tells which assumptions are in the core. An empty core means the formula
+     * itself is UNSAT; as in upstream solve_(), the instance then stays UNSAT (ok = false).
      *
      * Determinism: this is upstream MiniSat's assumptions mechanism (assumptions consumed in order
      * at the front of the decision stack), so a given clause set + assumptions always yields the
@@ -844,6 +882,17 @@ class MiniSat(
             this.assumptions = IntArray(0)
         }
         return if (r == 1) SatResult.SAT else SatResult.UNSAT
+    }
+
+    /**
+     * IPASIR failed: after UNSAT under assumptions, true iff the signed DIMACS assumption [lit] is
+     * in the failed core. [conflict] holds the negations of the failed assumptions, so this tests
+     * whether ~lit is in it. After SAT or without assumptions [conflict] is empty -> false.
+     */
+    override fun failed(lit: Int): Boolean {
+        val neg = litNeg(mkLit(abs(lit) - 1, lit < 0))
+        for (i in 0 until conflict.size) if (conflict[i] == neg) return true
+        return false
     }
 
     override fun valueOf(v: Int): Boolean {
