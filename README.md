@@ -4,7 +4,11 @@ A [Kotlin Multiplatform](https://kotlinlang.org/docs/multiplatform.html) port of
 **MiniSat** SAT solver (Niklas Eén and Niklas Sörensson). Plain Kotlin, no FFI and no native library, so it
 runs on any Kotlin target (JVM, Android, native, browser).
 
-The MiniSat core CDCL solver. `double` VSIDS activities are computed in the same order as the C, so the trace matches on the tested instances.
+All of MiniSat, ported from the maintained fork [meelgroup/minisat](https://github.com/meelgroup/minisat)
+(commit 9a0382d; its solver code is niklasso/minisat 37dc6c6 plus compile fixes): the core CDCL
+solver `MiniSat` (core/Solver) and the preprocessing solver `MiniSatSimp` (simp/SimpSolver:
+subsumption, variable elimination, asymmetric branching, model extension), including the clause
+allocator and garbage collection word for word, so traces match the C on the tested instances.
 
 It implements the `SatSolver` interface from
 [ksat-common](https://github.com/manfredscheucher/ksat-common), which is pulled in as a
