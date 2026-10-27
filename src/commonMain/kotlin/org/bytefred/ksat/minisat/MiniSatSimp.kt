@@ -6,8 +6,8 @@ import kotlin.math.abs
  * Kotlin port of MiniSat's preprocessing solver `Minisat::SimpSolver` (simp/SimpSolver.h +
  * simp/SimpSolver.cc): bounded variable elimination, backward subsumption / self-subsuming
  * resolution, optional asymmetric branching and implied-clause check, elimination clauses with
- * model extension, frozen variables. Upstream: github.com/meelgroup/minisat (commit 9a0382d, the
- * maintained fork; its solver code is niklasso/minisat 37dc6c6 plus compile fixes only); MIT,
+ * model extension, frozen variables. Upstream: github.com/meelgroup/minisat master 664490d
+ * (csb 9a0382d with [csbCompat], see [MiniSat]); MIT,
  * (c) 2006 Niklas Een, Niklas Sorensson; (c) 2007-2010 Niklas Sorensson.
  *
  * Extends [MiniSat] like `class SimpSolver : public Solver`. Members SimpSolver hides in C++
@@ -25,6 +25,12 @@ import kotlin.math.abs
 open class MiniSatSimp(numVarsHint: Int = 0) : MiniSat(numVarsHint) {
 
     // ---- Mode of operation (SimpSolver.cc options, upstream defaults) ----
+    /**
+     * `parsing` (master 9e03655): while true, [addClause_] does not write the added clause to the
+     * proof ([drupFile]). Upstream simp/Main.cc sets it to true before reading the CNF and to
+     * false before `eliminate(true)`; default false.
+     */
+    var parsing: Boolean = false
     var grow: Int = 0                   // Allow a variable elimination step to grow by a number of clauses.
     var clauseLim: Int = 20             // Variables are not eliminated if it produces a resolvent with a length above this limit. -1 means no limit.
     var subsumptionLim: Int = 1000      // Do not check if subsumption against a clause larger than this. -1 means no limit.
@@ -258,6 +264,9 @@ open class MiniSatSimp(numVarsHint: Int = 0) : MiniSat(numVarsHint) {
         if (!solverAddClause_(ps))
             return false
 
+        if (!parsing && drupFile != null)
+            drupLits('a', ps)
+
         if (useSimplification && clauses.size == nclauses + 1) {
             val cr = clauses.last()
 
@@ -303,10 +312,16 @@ open class MiniSatSimp(numVarsHint: Int = 0) : MiniSat(numVarsHint) {
         // if (!find(subsumption_queue, &c))
         subsumptionQueue.insert(cr)
 
+        if (drupFile != null) {
+            if (binDrup) binDRUPStrengthen(cr, l) else asciiDRUPStrengthen(cr, l)
+        }
+
         if (ca.size(cr) == 2) {
             removeClause(cr)
             ca.strengthen(cr, l)
         } else {
+            if (drupFile != null)
+                drupClause('d', cr)
             detachClause(cr, true)
             ca.strengthen(cr, l)
             attachClause(cr)
@@ -632,18 +647,34 @@ open class MiniSatSimp(numVarsHint: Int = 0) : MiniSat(numVarsHint) {
             mkElimClause(elimclauses, litNeg(mkLit(v)))
         }
 
-        var k = 0
-        while (k < cls.size) {   // cls.size() is re-read each iteration, as upstream
-            removeClause(cls[k])
-            k++
+        // master 333d3ef ("Fixing DRAT") moved the deletion of the old clauses below the cross
+        // product (the proof must add the resolvents while their antecedents still exist).
+        // csb 9a0382d deletes first ([csbCompat]).
+        val deleteAfterResolvents = !csbCompat
+        if (!deleteAfterResolvents) {
+            var k = 0
+            while (k < cls.size) {   // cls.size() is re-read each iteration, as upstream
+                removeClause(cls[k])
+                k++
+            }
         }
 
         // Produce clauses in cross product:
         val resolvent = addTmp
         for (i in 0 until pos.size)
             for (j in 0 until neg.size)
-                if (merge(pos[i], neg[j], v, resolvent) && !addClause_(resolvent))
+                if (merge(pos[i], neg[j], v, resolvent) &&
+                    !(if (deleteAfterResolvents) addClauseWithoutRcheck(resolvent) else addClause_(resolvent))
+                )
                     return false
+
+        if (deleteAfterResolvents) {
+            var k = 0
+            while (k < cls.size) {   // cls.size() is re-read each iteration, as upstream
+                removeClause(cls[k])
+                k++
+            }
+        }
 
         // Free occurs list for this variable:
         occurs[v].clearFree()
@@ -653,6 +684,25 @@ open class MiniSatSimp(numVarsHint: Int = 0) : MiniSat(numVarsHint) {
         if (watches[litNeg(mkLit(v))].size == 0) watches[litNeg(mkLit(v))].clearFree()
 
         return backwardSubsumptionCheck()
+    }
+
+    /**
+     * BUG FIX (not upstream): `addClause_` without the `use_rcheck` implied-clause check, for the
+     * clauses master's eliminateVar / substitute add while the clauses they replace are still in
+     * the database (333d3ef). There every resolvent (substituted clause) is implied by its own
+     * antecedents, so with rcheck master drops all of them and then deletes the antecedents:
+     * the formula is weakened and UNSAT instances are answered SAT (php_3_2 `-rcheck`). csb
+     * deletes first, so its rcheck only drops clauses implied by the rest. See
+     * minisat-full-port.md, bug list.
+     */
+    private fun addClauseWithoutRcheck(ps: IntVec): Boolean {
+        val saved = useRcheck
+        useRcheck = false
+        try {
+            return addClause_(ps)
+        } finally {
+            useRcheck = saved
+        }
     }
 
     /** Alg.h find(ca[cr], p). */
@@ -684,11 +734,17 @@ open class MiniSatSimp(numVarsHint: Int = 0) : MiniSat(numVarsHint) {
                 substClause.push(if (litVar(p) == v) litXor(x, litSign(p)) else p)
             }
 
-            removeClause(cls[i])
+            // master 333d3ef: removeClause after addClause_ (csb 9a0382d: before, [csbCompat]).
+            val deleteAfterAdd = !csbCompat
+            if (!deleteAfterAdd)
+                removeClause(cls[i])
 
-            if (!addClause_(substClause)) {
+            if (!(if (deleteAfterAdd) addClauseWithoutRcheck(substClause) else addClause_(substClause))) {
                 ok = false; return false
             }
+
+            if (deleteAfterAdd)
+                removeClause(cls[i])
             i++
         }
 

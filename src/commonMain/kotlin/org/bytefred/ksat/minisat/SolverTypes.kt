@@ -2,8 +2,8 @@ package org.bytefred.ksat.minisat
 
 /*
  * Kotlin port of MiniSat's core/SolverTypes.h and mtl/Alloc.h (RegionAllocator).
- * MiniSat (github.com/meelgroup/minisat 9a0382d; solver code identical to niklasso/minisat
- * 37dc6c6), MIT,
+ * MiniSat (github.com/meelgroup/minisat master 664490d; these files identical to csb 9a0382d
+ * and niklasso/minisat 37dc6c6 up to formatting), MIT,
  * (c) 2003-2006 Niklas Een, Niklas Sorensson; (c) 2007-2010 Niklas Sorensson.
  */
 

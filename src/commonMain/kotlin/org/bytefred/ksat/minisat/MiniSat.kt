@@ -8,9 +8,10 @@ import kotlin.math.pow
 
 /**
  * Kotlin port of MiniSat's core CDCL solver (`Minisat::Solver`, core/Solver.h + core/Solver.cc)
- * by Manfred Scheucher, 2026. Upstream: github.com/meelgroup/minisat (commit 9a0382d, the
- * maintained fork; its solver code is niklasso/minisat 37dc6c6 plus compile fixes only, no
- * behaviour change); MIT, (c) 2003-2006 Niklas Een, Niklas Sorensson;
+ * by Manfred Scheucher, 2026. Upstream: github.com/meelgroup/minisat, branch master, commit
+ * 664490d (the maintained fork: niklasso/minisat 37dc6c6 + compile fix + DRUP/DRAT proofs +
+ * option rdb-at); the csb line 9a0382d (= niklasso 37dc6c6 plus compile fixes) is reproduced
+ * with [csbCompat]. MIT, (c) 2003-2006 Niklas Een, Niklas Sorensson;
  * (c) 2007-2010 Niklas Sorensson. The preprocessing layer simp/SimpSolver is ported in
  * [MiniSatSimp], which extends this class like upstream's `SimpSolver : public Solver`.
  *
@@ -37,6 +38,14 @@ import kotlin.math.pow
  * implies/implied/asymm), DECIDE, CONFLICT, LEARN, RESTART, REDUCE, SIMPLIFY, GC core|simp,
  * RESULT SAT|UNSAT|UNKNOWN, and for [MiniSatSimp] STRENGTHEN, SUBSUME, ELIM and START/END phases.
  *
+ * master's additions over 37dc6c6 (commits 1d1940a 9e03655 333d3ef 6b0d7ff b1f6f7f a19dbf7):
+ * DRUP/DRAT proof output ([drupFile], [binDrup], [MiniSatSimp.parsing]), option rdb-at
+ * ([reduceDBAtConfl], with the show_info counters it depends on) and SimpSolver's
+ * resolvents-before-delete order. Upstream bugs fixed here (each marked `BUG FIX`, list in
+ * ksat-extra/doc/minisat-full-port.md): trim proof lines written without a proof file,
+ * reducedb_last_confl only maintained with show_info, the binary proof tail lost when solve does
+ * not end UNSAT ([binDRUPFlush] public), rcheck dropping every resolvent in master's order.
+ *
  * Not ported: printStats() (needs utils/System.cc cpuTime/memUsedPeak), the file-name
  * toDimacs overloads (an [Appendable] variant is provided), ClauseIterator/TrailIterator, and the
  * no-argument `solve()` (its name is taken by [SatSolver.solve]; use `solve(IntVec())`).
@@ -46,7 +55,34 @@ open class MiniSat(
 ) : SatSolver, Traceable {
 
     // ---- Mode of operation (Solver.cc options, upstream defaults) ----
+    /**
+     * `FILE* drup_file` (master): DRUP/DRAT proof output, `null` = no proof (upstream `NULL`,
+     * the default). Format: [binDrup]. Set it before the first clause is added, as upstream
+     * simp/Main.cc does; for [MiniSatSimp] also see [MiniSatSimp.parsing].
+     */
+    var drupFile: DrupFile? = null
+    /**
+     * `#define BIN_DRUP` (master's core/Solver.h defines it, so master writes binary proofs):
+     * `true` = binary DRAT (`binDRUP`, through a 2 MB buffer that is written out by
+     * [binDRUPFlush]: when more than 1 MB is pending after a clause, at the end of [solve_] with
+     * result UNSAT, and by the caller before closing the proof), `false` = the `#else` branches
+     * (ASCII DRUP via `fprintf`). A compile-time
+     * switch upstream, a property here; do not change it while a proof is being written.
+     */
+    var binDrup: Boolean = true
+    /**
+     * Reproduce meelgroup/minisat `csb` 9a0382d (= niklasso 37dc6c6) instead of the default
+     * target, meelgroup `master` 664490d. The only behaviour difference between the two is
+     * master's 333d3ef order in [MiniSatSimp]'s eliminateVar / substitute (old clauses deleted
+     * after the new ones are added; csb deletes first); with `true` the core solver is unchanged.
+     * csb has no proofs: a proof written with `csbCompat = true` follows the csb order (resolvents
+     * after their antecedents are deleted), which DRAT checkers may reject.
+     */
+    var csbCompat: Boolean = false
     var verbosity: Int = 0
+    /** `show_info` (master, simp/Main.cc `-show-info`): 1 = count reduceDB calls ([reduceDBCall],
+     *  [reducedbLastConfl] is maintained always); upstream also prints them, which is not ported. */
+    var showInfo: Int = 0
     var varDecay: Double = 0.95
     var clauseDecay: Double = 0.999
     var randomVarFreq: Double = 0.0
@@ -61,6 +97,13 @@ open class MiniSat(
 
     var restartFirst: Int = 100         // The initial restart limit.
     var restartInc: Double = 2.0        // The factor with which the restart limit is multiplied in each restart.
+    /** `reduceDB_at_confl` (master option `rdb-at`, range 0..INT32_MAX): call reduceDB at each k
+     *  conflicts, 0 = MiniSat's strategy. See [reduceDBNeeded]. */
+    var reduceDBAtConfl: Int = 0
+        set(value) {
+            require(value >= 0) { "rdb-at must be in 0..${Int.MAX_VALUE}, got $value" }
+            field = value
+        }
     var learntsizeFactor: Double = 1.0 / 3.0 // The intitial limit for learnt clauses is a factor of the original clauses.
     var learntsizeInc: Double = 1.1     // The limit for learnt clauses is multiplied with this factor each restart.
 
@@ -81,6 +124,9 @@ open class MiniSat(
     var learntsLiterals = 0L; protected set
     var maxLiterals = 0L; protected set
     var totLiterals = 0L; protected set
+
+    var reduceDBCall = 0L; protected set        // current reduceDB call number (master; counted with show_info == 1)
+    var reducedbLastConfl = 0L; protected set   // reduceDB called last time at this conflict (set always, BUG FIX 2; master: only with show_info == 1)
 
     // ---- Extra results (read-only) ----
     /** If problem is satisfiable, this vector contains the model (lbool per var). */
@@ -127,6 +173,7 @@ open class MiniSat(
     private val analyzeStackL = IntVec()    // ShrinkStackElem.l
     protected val analyzeToclear = IntVec()
     protected val addTmp = IntVec()
+    protected val addOc = IntVec()          // master: the clause before normalisation / trimming, for the proof
 
     protected var maxLearnts = 0.0
     protected var learntsizeAdjustConfl = 0.0
@@ -164,6 +211,115 @@ open class MiniSat(
     protected fun trProbeAssigns() {
         for (k in trailLim.last() until trail.size) tr("ASSIGN ${dimacsOf(trail[k])} reason=P")
     }
+
+    // =========================================================================================
+    // DRUP proof output (meelgroup/minisat master, core/Solver.h BIN_DRUP block)
+    // =========================================================================================
+
+    // static int buf_len; static unsigned char drup_buf[2 * 1024 * 1024]; static unsigned char* buf_ptr;
+    // Upstream these are static (one buffer per process, shared by all Solver objects); here
+    // each solver has its own buffer (allocated on first use). buf_ptr == drup_buf + buf_len
+    // always, so the index [bufLen] stands for both.
+    private var drupBuf: ByteArray? = null
+    private var bufLen = 0
+
+    private fun drupBuffer(): ByteArray = drupBuf ?: ByteArray(2 * 1024 * 1024).also { drupBuf = it }
+
+    private fun byteDRUP(l: Int) {
+        val buf = drupBuffer()
+        var u = (2L * (litVar(l) + 1) + (if (litSign(l)) 1 else 0)) and 0xffffffffL   // unsigned int
+        do {
+            buf[bufLen++] = ((u and 0x7f) or 0x80).toByte()
+            u = u ushr 7
+        } while (u != 0L)
+        buf[bufLen - 1] = (buf[bufLen - 1].toInt() and 0x7f).toByte()   // End marker of this unsigned number.
+    }
+
+    /** `binDRUP(op, c, drup_file)` for a literal vector. */
+    protected fun binDRUP(op: Char, c: IntVec) {
+        mAssert(op == 'a' || op == 'd') { "binDRUP op $op" }
+        val buf = drupBuffer()
+        buf[bufLen++] = op.code.toByte()
+        for (i in 0 until c.size) byteDRUP(c[i])
+        buf[bufLen++] = 0
+        if (bufLen > 1048576) binDRUPFlush()
+    }
+
+    /** `binDRUP(op, c, drup_file)` for the clause [cr]. */
+    protected fun binDRUPClause(op: Char, cr: Int) {
+        mAssert(op == 'a' || op == 'd') { "binDRUP op $op" }
+        val buf = drupBuffer()
+        buf[bufLen++] = op.code.toByte()
+        for (i in 0 until ca.size(cr)) byteDRUP(ca.lit(cr, i))
+        buf[bufLen++] = 0
+        if (bufLen > 1048576) binDRUPFlush()
+    }
+
+    /** `binDRUP_strengthen(c, l, drup_file)`: adds [cr] without [l]. */
+    protected fun binDRUPStrengthen(cr: Int, l: Int) {
+        val buf = drupBuffer()
+        buf[bufLen++] = 'a'.code.toByte()
+        for (i in 0 until ca.size(cr))
+            if (ca.lit(cr, i) != l)
+                byteDRUP(ca.lit(cr, i))
+        buf[bufLen++] = 0
+        if (bufLen > 1048576) binDRUPFlush()
+    }
+
+    /**
+     * `binDRUP_flush(drup_file)`: `fwrite_unlocked(drup_buf, 1, buf_len, drup_file)`, then empty
+     * the buffer. Public (upstream: protected): BUG FIX, the solver flushes the binary proof only
+     * when more than 1 MB is pending or when solve returns UNSAT, so a proof that ends otherwise
+     * (UNSAT found by [MiniSatSimp.eliminate], which simp/Main.cc reports without calling solve)
+     * would lose its tail. Call it before writing the final empty clause / closing the proof file.
+     * A no-op without pending bytes (and in ASCII mode, which writes directly).
+     */
+    fun binDRUPFlush() {
+        if (bufLen == 0) return
+        drupFile!!.write(drupBuffer(), 0, bufLen)
+        bufLen = 0
+    }
+
+    /** `fprintf(drup_file, "%i ", (var(p) + 1) * (-2 * sign(p) + 1))`. */
+    private fun asciiLit(sb: StringBuilder, p: Int) {
+        sb.append((litVar(p) + 1) * (-2 * (if (litSign(p)) 1 else 0) + 1)).append(' ')
+    }
+
+    private fun asciiWrite(sb: StringBuilder) {
+        val bytes = sb.toString().encodeToByteArray()
+        drupFile!!.write(bytes, 0, bytes.size)
+    }
+
+    /** The `#else` (ASCII) branch for a literal vector: `[d ]l1 l2 ... 0\n`. */
+    protected fun asciiDRUP(op: Char, c: IntVec) {
+        val sb = StringBuilder()
+        if (op == 'd') sb.append("d ")
+        for (i in 0 until c.size) asciiLit(sb, c[i])
+        asciiWrite(sb.append("0\n"))
+    }
+
+    /** The `#else` (ASCII) branch for the clause [cr]. */
+    protected fun asciiDRUPClause(op: Char, cr: Int) {
+        val sb = StringBuilder()
+        if (op == 'd') sb.append("d ")
+        for (i in 0 until ca.size(cr)) asciiLit(sb, ca.lit(cr, i))
+        asciiWrite(sb.append("0\n"))
+    }
+
+    /** The `#else` (ASCII) branch of strengthenClause: [cr] without [l]. */
+    protected fun asciiDRUPStrengthen(cr: Int, l: Int) {
+        val sb = StringBuilder()
+        for (i in 0 until ca.size(cr))
+            if (ca.lit(cr, i) != l)
+                asciiLit(sb, ca.lit(cr, i))
+        asciiWrite(sb.append("0\n"))
+    }
+
+    /** One `#ifdef BIN_DRUP binDRUP(op, c, drup_file); #else fprintf ... #endif` block (literal vector). */
+    protected fun drupLits(op: Char, c: IntVec) = if (binDrup) binDRUP(op, c) else asciiDRUP(op, c)
+
+    /** One `#ifdef BIN_DRUP binDRUP(op, c, drup_file); #else fprintf ... #endif` block (clause [cr]). */
+    protected fun drupClause(op: Char, cr: Int) = if (binDrup) binDRUPClause(op, cr) else asciiDRUPClause(op, cr)
 
     // =========================================================================================
     // Inline methods of Solver.h
@@ -336,6 +492,13 @@ open class MiniSat(
         var p = LIT_UNDEF
         var i = 0
         var j = 0
+
+        if (drupFile != null) {
+            addOc.clear()
+            for (k in 0 until ps.size)
+                addOc.push(ps[k])
+        }
+
         while (i < ps.size) {
             if (lbEq(valueLit(ps[i]), L_TRUE) || ps[i] == litNeg(p))
                 return true
@@ -345,6 +508,11 @@ open class MiniSat(
             i++
         }
         ps.shrink(i - j)
+
+        if (drupFile != null && i != j) {
+            drupLits('a', ps)
+            drupLits('d', addOc)
+        }
 
         if (ps.size == 0) {
             ok = false; return false
@@ -395,6 +563,15 @@ open class MiniSat(
 
     protected fun solverRemoveClause(cr: Int) {
         if (trace != null) trClause(if (ca.learnt(cr)) "DEL learnt" else "DEL orig", cr)
+
+        if (drupFile != null) {
+            if (ca.mark(cr) != 1) {
+                drupClause('d', cr)
+            }
+            // else: upstream printf("c Bug. I don't expect this to happen.\n") to stdout, a
+            // message only (not ported, like the other prints).
+        }
+
         detachClause(cr)
         // Don't leave pointers to free'd memory!
         if (locked(cr)) vardataReason[litVar(ca.lit(cr, 0))] = CREF_UNDEF
@@ -769,6 +946,15 @@ open class MiniSat(
                 learnts[j++] = learnts[i]
             i++
         }
+        if (showInfo == 1) {
+            reduceDBCall++
+            // printf("c [reduceDB] ...") of the reduceDB statistics: output only, not ported.
+        }
+        // BUG FIX (not upstream): master a19dbf7/b1f6f7f set reducedb_last_confl only inside the
+        // show_info block, so with rdb-at = k > 0 and show_info = 0 it stayed 0 and reduceDB ran
+        // before every decision once conflicts >= k. Set it unconditionally (same value master
+        // sets with show_info = 1). See minisat-full-port.md, bug list.
+        reducedbLastConfl = conflicts
         learnts.shrink(i - j)
         checkGarbage()
     }
@@ -786,17 +972,37 @@ open class MiniSat(
                 mAssert(lbEq(valueLit(ca.lit(cr, 0)), L_UNDEF) && lbEq(valueLit(ca.lit(cr, 1)), L_UNDEF)) {
                     "removeSatisfied: watched literal assigned"
                 }
+                // Trim clause:
+                var trimmed = false
+                var emptyOnTrimming = false   // master sets it, never reads it (dead, kept 1:1)
+                if (drupFile != null) {
+                    addOc.clear()
+                    for (k in 0 until ca.size(cr))
+                        addOc.push(ca.lit(cr, k))
+                }
+
                 val traceSize = ca.size(cr)
                 var k = 2
                 while (k < ca.size(cr)) {
                     if (lbEq(valueLit(ca.lit(cr, k)), L_FALSE)) {
                         ca.setLit(cr, k--, ca.lit(cr, ca.size(cr) - 1))
                         ca.pop(cr)
+                        trimmed = true
                     }
+                    if (ca.size(cr) == 0)
+                        emptyOnTrimming = true
                     k++
                 }
                 if (trace != null && traceSize != ca.size(cr))
                     trClause(if (ca.learnt(cr)) "TRIM learnt" else "TRIM orig", cr)
+                // master: `if (trimmed)` without `drup_file &&` (binDRUP / fprintf to a NULL
+                // drup_file: the binary build buffers these bytes anyway and writes them to NULL
+                // once 1 MB is pending, the ASCII build crashes at the first trim). Guarded here so
+                // that the solver without a proof behaves as before; see minisat-full-port.md.
+                if (trimmed && drupFile != null) {
+                    drupClause('a', cr)
+                    drupLits('d', addOc)
+                }
                 cs[j++] = cs[i]
             }
             i++
@@ -901,6 +1107,9 @@ open class MiniSat(
                     uncheckedEnqueue(learntClause[0], cr)
                 }
 
+                if (drupFile != null)
+                    drupLits('a', learntClause)
+
                 varDecayActivity()
                 claDecayActivity()
 
@@ -909,7 +1118,7 @@ open class MiniSat(
                     learntsizeAdjustCnt = learntsizeAdjustConfl.toInt()
                     maxLearnts *= learntsizeInc
 
-                    if (verbosity >= 1)
+                    if (verbosity >= 1 && showInfo != 1)
                         println(
                             "| " + fmtD(conflicts.toInt(), 9) + " | " +
                                 fmtD(decVars.toInt() - (if (trailLim.size == 0) trail.size else trailLim[0]), 7) + " " +
@@ -932,7 +1141,7 @@ open class MiniSat(
                 if (decisionLevel() == 0 && !simplify())
                     return L_FALSE
 
-                if ((learnts.size - nAssigns()).toDouble() >= maxLearnts)
+                if (reduceDBNeeded())
                     // Reduce the set of learnt clauses:
                     reduceDB()
 
@@ -971,6 +1180,16 @@ open class MiniSat(
                 }
             }
         }
+    }
+
+    /** `reduceDB_needed()` (master a19dbf7, option rdb-at). With [reduceDBAtConfl] > 0 the
+     *  distance is measured from [reducedbLastConfl] (the last reduceDB; see the BUG FIX in
+     *  reduceDB). */
+    protected fun reduceDBNeeded(): Boolean {
+        if (reduceDBAtConfl == 0) {
+            return (learnts.size - nAssigns()).toDouble() >= maxLearnts
+        }
+        return conflicts - reducedbLastConfl >= reduceDBAtConfl   // uint64_t - uint64_t >= int
     }
 
     fun progressEstimate(): Double {
@@ -1034,6 +1253,8 @@ open class MiniSat(
             println("| Conflicts |          ORIGINAL         |          LEARNT          | Progress |")
             println("|           |    Vars  Clauses Literals |    Limit  Clauses Lit/Cl |          |")
             println("===============================================================================")
+            // master: with show_info == 1 two header lines of the reduceDB statistics ("c  #  RDB_call ...");
+            // output of the statistics that are not printed here, not ported.
         }
 
         // Search:
@@ -1048,6 +1269,9 @@ open class MiniSat(
 
         if (verbosity >= 1)
             println("===============================================================================")
+
+        if (drupFile != null && binDrup && lbEq(status, L_FALSE))   // #ifdef BIN_DRUP
+            binDRUPFlush()
 
         if (lbEq(status, L_TRUE)) {
             // Extend & copy model:

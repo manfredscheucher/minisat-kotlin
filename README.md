@@ -4,8 +4,10 @@ A [Kotlin Multiplatform](https://kotlinlang.org/docs/multiplatform.html) port of
 **MiniSat** SAT solver (Niklas Eén and Niklas Sörensson). Plain Kotlin, no FFI and no native library, so it
 runs on any Kotlin target (JVM, Android, native, browser).
 
-All of MiniSat, ported from the maintained fork [meelgroup/minisat](https://github.com/meelgroup/minisat)
-(commit 9a0382d; its solver code is niklasso/minisat 37dc6c6 plus compile fixes): the core CDCL
+All of MiniSat, ported from the maintained fork [meelgroup/minisat](https://github.com/meelgroup/minisat),
+branch `master` (commit 664490d: niklasso/minisat 37dc6c6 plus DRUP/DRAT proofs and the option
+rdb-at), with four upstream bugs fixed. Its `csb` line (9a0382d, niklasso 37dc6c6 plus compile
+fixes) is reproduced exactly with `csbCompat = true`. The port covers the core CDCL
 solver `MiniSat` (core/Solver) and the preprocessing solver `MiniSatSimp` (simp/SimpSolver:
 subsumption, variable elimination, asymmetric branching, model extension), including the clause
 allocator and garbage collection word for word, so traces match the C on the tested instances.
@@ -22,6 +24,32 @@ repo is just the solver source, usable on its own. The `Ksat` facade over all fo
 in the main repo **[sat-solvers-kotlin](https://github.com/manfredscheucher/sat-solvers-kotlin)**;
 the verification harness, benchmarks and the multiplatform demo are in its optional
 **[ksat-extra](https://github.com/manfredscheucher/ksat-extra)** submodule.
+
+## Proofs, rdb-at, csb switch
+
+From meelgroup's `master`: DRUP/DRAT proof output and the option `rdb-at` (reduceDB every k
+conflicts), both off by default.
+
+```kotlin
+val out = java.io.FileOutputStream("proof.drat")      // any byte sink
+val s = MiniSatSimp()
+s.drupFile = DrupFile { buf, off, len -> out.write(buf, off, len) }
+s.binDrup = true            // binary DRAT (master's default); false = ASCII DRUP
+s.parsing = true            // as master's simp/Main.cc: no proof lines for the input clauses
+// ... add the clauses ...
+s.parsing = false
+s.eliminate(true)
+val ret = if (s.okay()) s.solveLimited(IntVec()) else L_FALSE
+s.binDRUPFlush()            // write the pending binary proof (upstream never does this here)
+if (lbEq(ret, L_FALSE)) out.write(byteArrayOf('a'.code.toByte(), 0))   // final empty clause ("0\n" in ASCII)
+out.close()
+```
+
+As upstream, the binary proof goes through a 2 MB buffer; call `binDRUPFlush()` before closing
+the proof. `reduceDBAtConfl = k` is master's `-rdb-at=k`. `csbCompat = true` reproduces csb 9a0382d
+(the only behaviour difference: master deletes an eliminated variable's clauses after adding the
+resolvents, csb before). Fixed upstream bugs, the decisions and the verification:
+[ksat-extra/doc/minisat-full-port.md](https://github.com/manfredscheucher/ksat-extra).
 
 ## Build
 

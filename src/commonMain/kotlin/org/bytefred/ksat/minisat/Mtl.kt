@@ -2,8 +2,8 @@ package org.bytefred.ksat.minisat
 
 /*
  * Kotlin port of MiniSat's mtl/ (Vec.h, Alg.h, Sort.h, Heap.h, Queue.h, IntMap.h) as far as
- * the solver uses it. MiniSat (github.com/meelgroup/minisat 9a0382d; solver code identical to
- * niklasso/minisat 37dc6c6), MIT,
+ * the solver uses it. MiniSat (github.com/meelgroup/minisat master 664490d; mtl/ identical to
+ * csb 9a0382d and niklasso/minisat 37dc6c6 up to formatting), MIT,
  * (c) 2003-2006 Niklas Een, Niklas Sorensson; (c) 2007-2010 Niklas Sorensson.
  *
  * Only Int/Double element types are needed (Var, Lit.x, CRef, lbool, char and int maps are all
