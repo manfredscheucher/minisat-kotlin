@@ -25,6 +25,13 @@ in the main repo **[sat-solvers-kotlin](https://github.com/manfredscheucher/sat-
 the verification harness, benchmarks and the multiplatform demo are in its optional
 **[ksat-extra](https://github.com/manfredscheucher/ksat-extra)** submodule.
 
+## Reading DIMACS
+
+`parseDimacs(text, solver, strictp = false)` is MiniSat's own parser (core/Dimacs.h): clauses go
+into the solver one by one through `addClause_`, variables are created as they appear, all clauses
+are read (also beyond the header count), and malformed input throws `DimacsParseError` with
+upstream's `PARSE ERROR! ...` message (upstream exits with 3).
+
 ## Proofs, rdb-at, csb switch
 
 From meelgroup's `master`: DRUP/DRAT proof output and the option `rdb-at` (reduceDB every k

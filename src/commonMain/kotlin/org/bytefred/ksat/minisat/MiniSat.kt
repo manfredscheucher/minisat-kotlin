@@ -3,6 +3,7 @@ package org.bytefred.ksat.minisat
 import org.bytefred.ksat.SatResult
 import org.bytefred.ksat.SatSolver
 import org.bytefred.ksat.Traceable
+import kotlin.concurrent.Volatile
 import kotlin.math.abs
 import kotlin.math.pow
 
@@ -182,6 +183,11 @@ open class MiniSat(
     // Resource constraints:
     protected var conflictBudget = -1L      // -1 means no budget.
     protected var propagationBudget = -1L   // -1 means no budget.
+    // Solver.h `bool asynch_interrupt` (plain bool upstream, also in csb and niklasso). @Volatile is
+    // a port addition (no effect single-threaded): interrupt() is documented upstream as "potentially
+    // asynchronous", and without it the JVM JIT may hoist the read in withinBudget() out of the
+    // search loop, so an interrupt() from another thread would never be seen (CaDiCaL port: same).
+    @Volatile
     protected var asynchInterrupt = false
 
     // ---- trace sink ----
