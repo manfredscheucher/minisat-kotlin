@@ -5,7 +5,7 @@ plugins {
 
 // Standalone build of the Kotlin minisat port. Compiles the port against ksat-common
 // (mounted at common/). The byte-for-byte shadow tests, benchmarks and the Ksat facade
-// live in the main repo (sat-solvers-kotlin), which consumes this repo as a submodule.
+// live in the main repo (ksat), which consumes this repo as a submodule.
 kotlin {
     androidLibrary {
         namespace = "org.bytefred.ksat.minisat"
